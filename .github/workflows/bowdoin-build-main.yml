@@ -1,4 +1,4 @@
-name: Docker Dev Images Build
+name: Bowdoin Docker Dev Images Build
 
 on:
   workflow_dispatch:
