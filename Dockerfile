@@ -1,7 +1,7 @@
-# v0.8.5
+# v0.8.7
 
 # 1. Base Image - Setup Globals
-FROM node:20-alpine AS base
+FROM node:24.16.0-alpine AS base
 ARG NODE_MAX_OLD_SPACE_SIZE=6144
 ENV NODE_MAX_OLD_SPACE_SIZE=$NODE_MAX_OLD_SPACE_SIZE
 
@@ -87,7 +87,7 @@ COPY --from=build-packages /app/packages/api/dist ./packages/api/dist
 COPY --from=build-client /app/client/dist ./client/dist
 
 # Permissions and Environment
-RUN mkdir -p /app/client/public/images /app/logs /app/uploads && \
+RUN mkdir -p /app/client/public/images /app/logs /app/uploads /app/skill && \
     chown -R node:node /app/client/public/images /app/logs /app/uploads && \
     touch .env && \
     chown node:node .env
