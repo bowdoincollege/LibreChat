@@ -1,13 +1,13 @@
-# v0.8.3
+# v0.8.7
 
 # 1. Base Image - Setup Globals
-FROM node:20-alpine AS base
+FROM node:24.16.0-alpine AS base
 ARG NODE_MAX_OLD_SPACE_SIZE=6144
 ENV NODE_MAX_OLD_SPACE_SIZE=$NODE_MAX_OLD_SPACE_SIZE
 
 # Install jemalloc and other system deps
-RUN apk add --no-cache jemalloc curl python3 py3-pip && \
-    mkdir -p /app
+RUN apk upgrade --no-cache && \
+    apk add --no-cache jemalloc curl python3 py3-pip
 
 # Set environment variable to use jemalloc
 ENV LD_PRELOAD=/usr/lib/libjemalloc.so.2
@@ -87,7 +87,7 @@ COPY --from=build-packages /app/packages/api/dist ./packages/api/dist
 COPY --from=build-client /app/client/dist ./client/dist
 
 # Permissions and Environment
-RUN mkdir -p /app/client/public/images /app/logs /app/uploads && \
+RUN mkdir -p /app/client/public/images /app/logs /app/uploads /app/skill && \
     chown -R node:node /app/client/public/images /app/logs /app/uploads && \
     touch .env && \
     chown node:node .env
