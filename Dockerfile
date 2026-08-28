@@ -51,6 +51,7 @@ COPY --from=build-packages /app/packages/data-schemas/dist /app/packages/data-sc
 COPY --from=build-packages /app/packages/api/dist /app/packages/api/dist
 COPY --from=build-packages /app/packages/client/dist /app/packages/client/dist
 COPY --from=build-packages /app/packages/client/src /app/packages/client/src
+COPY --from=build-packages /app/packages/client/tailwind.preset.cjs /app/packages/client/tailwind.preset.cjs
 
 WORKDIR /app/client
 # Run build explicitly
