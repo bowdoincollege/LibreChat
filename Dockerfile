@@ -1,4 +1,4 @@
-# v0.8.7
+# v0.8.8-rc1
 
 # 1. Base Image - Setup Globals
 FROM node:24.16.0-alpine AS base
@@ -51,6 +51,7 @@ COPY --from=build-packages /app/packages/data-schemas/dist /app/packages/data-sc
 COPY --from=build-packages /app/packages/api/dist /app/packages/api/dist
 COPY --from=build-packages /app/packages/client/dist /app/packages/client/dist
 COPY --from=build-packages /app/packages/client/src /app/packages/client/src
+COPY --from=build-packages /app/packages/client/tailwind.preset.cjs /app/packages/client/tailwind.preset.cjs
 
 WORKDIR /app/client
 # Run build explicitly
@@ -87,10 +88,23 @@ COPY --from=build-packages /app/packages/api/dist ./packages/api/dist
 COPY --from=build-client /app/client/dist ./client/dist
 
 # Permissions and Environment
-RUN mkdir -p /app/client/public/images /app/logs /app/uploads /app/skill && \
+RUN mkdir -p /app/client/public/images /app/logs /app/uploads /app/skill /app/data && \
     chown -R node:node /app/client/public/images /app/logs /app/uploads && \
+    chmod 1777 /app/data && \
     touch .env && \
     chown node:node .env
+
+# Optional build metadata surfaced in Settings -> About for support triage.
+# Declared here (after the heavy install/build steps) so that commit/date
+# changing on every CI run does not bust the cache for dependency install
+# and frontend build layers. When unset, the backend falls back to local
+# git resolution (if .git is present), and finally to empty values.
+ARG BUILD_COMMIT=
+ARG BUILD_BRANCH=
+ARG BUILD_DATE=
+ENV BUILD_COMMIT=${BUILD_COMMIT}
+ENV BUILD_BRANCH=${BUILD_BRANCH}
+ENV BUILD_DATE=${BUILD_DATE}
 
 USER node
 
