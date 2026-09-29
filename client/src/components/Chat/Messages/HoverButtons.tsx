@@ -1,16 +1,21 @@
-import React, { useState, useMemo, memo } from 'react';
+import React, { useState, useMemo, useCallback, memo } from 'react';
+import { Copy, Check } from 'lucide';
+import { useAtomValue } from 'jotai';
 import { useRecoilState } from 'recoil';
+import { findMessageById, isUserInitiatedCompaction } from 'librechat-data-provider';
 import {
   Button,
   EditIcon,
-  CheckMark,
-  Clipboard,
+  MorphIcon,
   ContinueIcon,
   TooltipAnchor,
   RegenerateIcon,
 } from '@librechat/client';
 import type { TConversation, TMessage, TFeedback } from 'librechat-data-provider';
 import { useGenerationsByLatest, useLocalize } from '~/hooks';
+import { useOptionalMessagesOperations } from '~/Providers';
+import { hasEditablePart } from './Content/editableParts';
+import { revealedQueuedTurnFamily } from '~/store/steer';
 import { Fork } from '~/components/Conversations';
 import { hoverButtonClasses } from './styles';
 import MessageAudio from './MessageAudio';
@@ -22,6 +27,7 @@ type THoverButtons = {
   isEditing: boolean;
   enterEdit: (cancel?: boolean) => void;
   copyToClipboard: (setIsCopied: React.Dispatch<React.SetStateAction<boolean>>) => void;
+  getCanCopy: () => boolean;
   conversation: TConversation | null;
   isSubmitting: boolean;
   message: TMessage;
@@ -43,6 +49,7 @@ type HoverButtonProps = {
   className?: string;
   buttonStyle?: string;
   dataTestId?: string;
+  disabled?: boolean;
 };
 
 const extractMessageContent = (message: TMessage): string => {
@@ -87,6 +94,7 @@ const HoverButton = memo(
     isLast = false,
     className = '',
     dataTestId,
+    disabled = false,
   }: HoverButtonProps) => {
     const buttonStyle = hoverButtonClasses({ isActive, isLast, className });
 
@@ -102,6 +110,7 @@ const HoverButton = memo(
             aria-label={title}
             className={buttonStyle}
             onClick={onClick}
+            disabled={disabled}
           >
             {icon}
           </Button>
@@ -118,6 +127,7 @@ const HoverButtons = ({
   isEditing,
   enterEdit,
   copyToClipboard,
+  getCanCopy,
   conversation,
   isSubmitting,
   message,
@@ -130,6 +140,8 @@ const HoverButtons = ({
   const localize = useLocalize();
   const [isCopied, setIsCopied] = useState(false);
   const [TextToSpeech] = useRecoilState<boolean>(store.textToSpeech);
+  const { getMessages } = useOptionalMessagesOperations();
+  const pendingReveal = useAtomValue(revealedQueuedTurnFamily(conversation?.conversationId ?? ''));
 
   const endpoint = useMemo(() => {
     if (!conversation) {
@@ -138,15 +150,44 @@ const HoverButtons = ({
     return conversation.endpointType ?? conversation.endpoint;
   }, [conversation]);
 
+  /** Which turn a rerun would replay, resolved for a model turn only. The lookup
+   *  goes through the messages array's memoized id index, so a conversation is
+   *  indexed once for all its rows rather than scanned once per row, and the memo
+   *  is keyed on the parent id: `getMessages` is a cache read, not a subscription,
+   *  and a parent's authorship never changes. Outside the messages view (a search
+   *  row) the thread is unavailable and the answer stays unknown; with the thread
+   *  in hand a parent that does not resolve is absent — an imported reply the
+   *  lineage left at the root — and there is no turn to replay, which `regenerate`
+   *  can only log about once the button is pressed. */
+  const parentIsUserMessage = useMemo(() => {
+    if (message.isCreatedByUser === true) {
+      return undefined;
+    }
+    const messages = getMessages();
+    if (messages == null) {
+      return undefined;
+    }
+    return findMessageById(messages, message.parentMessageId)?.isCreatedByUser === true;
+  }, [getMessages, message.isCreatedByUser, message.parentMessageId]);
+
+  /** Resolved only if the row has nothing to replay, because the artifact check
+   *  inside parses markdown. */
+  const getHasEditablePart = useCallback(() => hasEditablePart(message), [message]);
+
+  /** A pending queued follow-up is a generation about to start: no rerun or
+   *  continuation may race it, exactly as while a run is submitting. */
   const generationCapabilities = useGenerationsByLatest({
     isEditing,
-    isSubmitting,
+    isSubmitting: isSubmitting || pendingReveal != null,
     error: message.error,
     endpoint: endpoint ?? '',
     messageId: message.messageId,
     searchResult: message.searchResult,
     finish_reason: message.finish_reason,
     isCreatedByUser: message.isCreatedByUser,
+    getHasEditablePart,
+    parentIsUserMessage,
+    isUserInitiatedCompaction: isUserInitiatedCompaction(message),
     latestMessageId: latestMessageId,
   });
 
@@ -159,11 +200,17 @@ const HoverButtons = ({
     isEditableEndpoint,
   } = generationCapabilities;
 
+  const canCopy = useMemo(
+    () => !isActiveStreamingMessage && getCanCopy(),
+    [isActiveStreamingMessage, getCanCopy],
+  );
+
   if (!conversation) {
     return null;
   }
 
   const { isCreatedByUser, error } = message;
+  const isSubagentThreadReadOnly = conversation.subagentThread != null;
 
   const onEdit = () => {
     if (isEditing) {
@@ -203,8 +250,9 @@ const HoverButtons = ({
           title={
             isCopied ? localize('com_ui_copied_to_clipboard') : localize('com_ui_copy_to_clipboard')
           }
-          icon={isCopied ? <CheckMark className="h-[18px] w-[18px]" /> : <Clipboard size="19" />}
+          icon={<MorphIcon icon={isCopied ? Check : Copy} size={19} />}
           isLast={isLast}
+          disabled={!canCopy}
           className={cn(
             'ml-0 flex items-center gap-1.5 text-xs',
             isSubmitting && isCreatedByUser
@@ -216,7 +264,7 @@ const HoverButtons = ({
       )}
 
       {/* Edit Button */}
-      {isEditableEndpoint && !hideEditButton && (
+      {!isSubagentThreadReadOnly && isEditableEndpoint && !hideEditButton && (
         <HoverButton
           id={`edit-${message.messageId}`}
           onClick={onEdit}
@@ -245,7 +293,7 @@ const HoverButtons = ({
       )}
 
       {/* Regenerate Button */}
-      {regenerateEnabled && (
+      {!isSubagentThreadReadOnly && regenerateEnabled && (
         <HoverButton
           onClick={regenerate}
           title={localize('com_ui_regenerate')}
@@ -257,7 +305,7 @@ const HoverButtons = ({
       )}
 
       {/* Continue Button */}
-      {continueSupported && (
+      {!isSubagentThreadReadOnly && continueSupported && (
         <HoverButton
           onClick={(e) => e && handleContinue(e)}
           title={localize('com_ui_continue')}
