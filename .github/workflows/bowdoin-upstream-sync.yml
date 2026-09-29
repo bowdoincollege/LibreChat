@@ -1,0 +1,48 @@
+name: Bowdoin Upstream Release Sync
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Upstream tag to sync (e.g. v0.8.8). Leave empty for the latest upstream release.'
+        required: false
+        type: string
+  schedule:
+    - cron: '0 13 * * 1'
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  sync:
+    if: github.repository == 'bowdoincollege/LibreChat'
+    runs-on: ubuntu-latest
+
+    steps:
+      # SYNC_TOKEN: fine-grained PAT with Contents, Pull requests and Workflows (read/write).
+      # GITHUB_TOKEN cannot push upstream workflow changes or trigger CI on the PR.
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: bowdoin-dev
+          fetch-depth: 0
+          token: ${{ secrets.SYNC_TOKEN }}
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Merge upstream tag and open PR
+        env:
+          GH_TOKEN: ${{ secrets.SYNC_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ inputs.tag }}
+          BASE_BRANCH: bowdoin-dev
+        run: |
+          cp .github/scripts/bowdoin-upstream-sync.sh "$RUNNER_TEMP/sync.sh"
+          bash "$RUNNER_TEMP/sync.sh"
