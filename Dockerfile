@@ -1,98 +1,64 @@
 # v0.8.8-rc1
 
-# 1. Base Image - Setup Globals
-FROM node:24.16.0-alpine AS base
-ARG NODE_MAX_OLD_SPACE_SIZE=6144
-ENV NODE_MAX_OLD_SPACE_SIZE=$NODE_MAX_OLD_SPACE_SIZE
+# Base node image
+FROM node:24.16.0-alpine AS node
 
-# Install jemalloc and other system deps
-RUN apk upgrade --no-cache && \
-    apk add --no-cache jemalloc curl python3 py3-pip
+RUN apk upgrade --no-cache
+RUN apk add --no-cache jemalloc
+RUN apk add --no-cache python3 py3-pip uv
 
 # Set environment variable to use jemalloc
 ENV LD_PRELOAD=/usr/lib/libjemalloc.so.2
-
-WORKDIR /app
-
-# Configure NPM
-RUN npm config set fetch-retry-maxtimeout 600000 && \
-    npm config set fetch-retries 5 && \
-    npm config set fetch-retry-mintimeout 15000
-
-# 2. Dependencies - Install ALL dependencies (including dev) for building
-FROM base AS deps
-# Copy ALL package.json files first to leverage cache for npm ci
-COPY package.json package-lock.json ./
-COPY packages/data-provider/package.json ./packages/data-provider/
-COPY packages/data-schemas/package.json ./packages/data-schemas/
-COPY packages/api/package.json ./packages/api/
-COPY packages/client/package.json ./packages/client/
-COPY client/package.json ./client/
-COPY api/package.json ./api/
-
-RUN --mount=type=cache,target=/root/.npm npm ci
-
-# 3. Builder - Service Packages
-FROM deps AS build-packages
-COPY packages ./packages
-# Build all packages in order (or parallel if possible, but sequential is safer for deps)
-# We can use the root script if it exists, or run them individually.
-# Looking at package.json, "build:packages" runs them.
-RUN npm run build:packages
-
-# 4. Builder - Frontend Client
-FROM deps AS build-client
-ENV NODE_OPTIONS="--max-old-space-size=${NODE_MAX_OLD_SPACE_SIZE}"
-# Copy source
-COPY client ./client
-# Copy built packages from previous stage
-COPY --from=build-packages /app/packages/data-provider/dist /app/packages/data-provider/dist
-COPY --from=build-packages /app/packages/data-schemas/dist /app/packages/data-schemas/dist
-COPY --from=build-packages /app/packages/api/dist /app/packages/api/dist
-COPY --from=build-packages /app/packages/client/dist /app/packages/client/dist
-COPY --from=build-packages /app/packages/client/src /app/packages/client/src
-COPY --from=build-packages /app/packages/client/tailwind.preset.cjs /app/packages/client/tailwind.preset.cjs
-
-WORKDIR /app/client
-# Run build explicitly
-RUN npm run build
-
-# 5. Final Image - Production Runtime
-FROM base AS production
 
 # Add `uv` for extended MCP support
 COPY --from=ghcr.io/astral-sh/uv:0.9.5-python3.12-alpine /usr/local/bin/uv /usr/local/bin/uvx /bin/
 RUN uv --version
 
+# Set configurable max-old-space-size with default
+ARG NODE_MAX_OLD_SPACE_SIZE=6144
+ARG NPM_CI_TIMEOUT_SECONDS=1500
+ARG NPM_CI_ATTEMPTS=2
+
+RUN mkdir -p /app && chown node:node /app
 WORKDIR /app
 
-# Install ONLY production dependencies
-COPY package.json package-lock.json ./
-COPY packages/data-provider/package.json ./packages/data-provider/
-COPY packages/data-schemas/package.json ./packages/data-schemas/
-COPY packages/api/package.json ./packages/api/
-COPY packages/client/package.json ./packages/client/
-COPY client/package.json ./client/
-COPY api/package.json ./api/
+USER node
 
-RUN --mount=type=cache,target=/root/.npm npm ci --omit=dev
+COPY --chown=node:node package.json package-lock.json ./
+COPY --chown=node:node api/package.json ./api/package.json
+COPY --chown=node:node client/package.json ./client/package.json
+COPY --chown=node:node packages/data-provider/package.json ./packages/data-provider/package.json
+COPY --chown=node:node packages/data-schemas/package.json ./packages/data-schemas/package.json
+COPY --chown=node:node packages/api/package.json ./packages/api/package.json
 
-# Copy Source Code (API only, client is served from dist)
-COPY api ./api
-COPY config ./config
+RUN \
+    # Allow mounting of these files, which have no default
+    touch .env ; \
+    # Create directories for the volumes to inherit the correct permissions
+    mkdir -p /app/client/public/images /app/logs /app/uploads /app/skill /app/data ; \
+    chmod 1777 /app/data ; \
+    npm config set fetch-retry-maxtimeout 600000 ; \
+    npm config set fetch-retries 5 ; \
+    npm config set fetch-retry-mintimeout 15000 ; \
+    attempt=1 ; \
+    until timeout "$NPM_CI_TIMEOUT_SECONDS" npm ci --no-audit ; do \
+        status=$? ; \
+        if [ "$attempt" -ge "$NPM_CI_ATTEMPTS" ]; then \
+            exit "$status" ; \
+        fi ; \
+        echo "npm ci --no-audit failed with exit code $status; retrying attempt $((attempt + 1))/$NPM_CI_ATTEMPTS" ; \
+        attempt=$((attempt + 1)) ; \
+        npm cache clean --force || true ; \
+        sleep 10 ; \
+    done
 
-# Copy Built Artifacts from previous stages
-COPY --from=build-packages /app/packages/data-provider/dist ./packages/data-provider/dist
-COPY --from=build-packages /app/packages/data-schemas/dist ./packages/data-schemas/dist
-COPY --from=build-packages /app/packages/api/dist ./packages/api/dist
-COPY --from=build-client /app/client/dist ./client/dist
+COPY --chown=node:node . .
 
-# Permissions and Environment
-RUN mkdir -p /app/client/public/images /app/logs /app/uploads /app/skill /app/data && \
-    chown -R node:node /app/client/public/images /app/logs /app/uploads && \
-    chmod 1777 /app/data && \
-    touch .env && \
-    chown node:node .env
+RUN \
+    # React client build with configurable memory
+    NODE_OPTIONS="--max-old-space-size=${NODE_MAX_OLD_SPACE_SIZE}" npm run frontend; \
+    npm prune --production; \
+    npm cache clean --force
 
 # Optional build metadata surfaced in Settings -> About for support triage.
 # Declared here (after the heavy install/build steps) so that commit/date
@@ -106,9 +72,14 @@ ENV BUILD_COMMIT=${BUILD_COMMIT}
 ENV BUILD_BRANCH=${BUILD_BRANCH}
 ENV BUILD_DATE=${BUILD_DATE}
 
-USER node
-
+# Node API setup
 EXPOSE 3080
 ENV HOST=0.0.0.0
-# Use node directly instead of npm run to save memory/signals
-CMD ["node", "api/server/index.js"]
+CMD ["npm", "run", "backend"]
+
+# Optional: for client with nginx routing
+# FROM nginx:stable-alpine AS nginx-client
+# WORKDIR /usr/share/nginx/html
+# COPY --from=node /app/client/dist /usr/share/nginx/html
+# COPY client/nginx.conf /etc/nginx/conf.d/default.conf
+# ENTRYPOINT ["nginx", "-g", "daemon off;"]
