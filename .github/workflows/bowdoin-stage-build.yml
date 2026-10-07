@@ -9,6 +9,7 @@ on:
       - 'api/**'
       - 'client/**'
       - 'packages/**'
+      - 'Dockerfile.bowdoin'
 
 jobs:
   build:
@@ -46,7 +47,7 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           context: .
-          file: Dockerfile
+          file: Dockerfile.bowdoin
           push: true
           tags: |
             ${{ steps.login-ecr.outputs.registry }}/librechat:${{ github.sha }}
