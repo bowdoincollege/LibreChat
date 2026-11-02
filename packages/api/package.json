@@ -102,7 +102,7 @@
     "winston": "^3.17.0",
     "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz",
     "yauzl": "^3.2.1",
-    "zod-openapi": "^4.2.4"
+    "zod-openapi": "^6.0.2"
   },
   "publishConfig": {
     "registry": "https://registry.npmjs.org/"
