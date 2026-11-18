@@ -2,13 +2,13 @@
 # merge cleanly; the sync PR reports upstream Dockerfile changes to port here.
 
 # 1. Base Image - Setup Globals
-FROM node:24.16.0-alpine AS base
+FROM docker.io/library/node:24.22.3-alpine AS base
 ARG NODE_MAX_OLD_SPACE_SIZE=6144
 ENV NODE_MAX_OLD_SPACE_SIZE=$NODE_MAX_OLD_SPACE_SIZE
 
 # Install jemalloc and other system deps
 RUN apk upgrade --no-cache && \
-    apk add --no-cache jemalloc curl python3 py3-pip
+    apk add --no-cache bash jemalloc curl python3 py3-pip
 
 # Set environment variable to use jemalloc
 ENV LD_PRELOAD=/usr/lib/libjemalloc.so.2
@@ -28,10 +28,13 @@ COPY packages/data-provider/package.json ./packages/data-provider/
 COPY packages/data-schemas/package.json ./packages/data-schemas/
 COPY packages/api/package.json ./packages/api/
 COPY packages/client/package.json ./packages/client/
+COPY packages/chat/package.json ./packages/chat/
 COPY client/package.json ./client/
 COPY api/package.json ./api/
+# packages/api depends on @librechat/code through file:../../vendor/code
+COPY vendor/code ./vendor/code
 
-RUN --mount=type=cache,target=/root/.npm npm ci
+RUN --mount=type=cache,target=/root/.npm npm ci --no-audit
 
 # 3. Builder - Service Packages
 FROM deps AS build-packages
@@ -53,8 +56,13 @@ COPY --from=build-packages /app/packages/api/dist /app/packages/api/dist
 COPY --from=build-packages /app/packages/client/dist /app/packages/client/dist
 COPY --from=build-packages /app/packages/client/src /app/packages/client/src
 COPY --from=build-packages /app/packages/client/tailwind.preset.cjs /app/packages/client/tailwind.preset.cjs
+COPY --from=build-packages /app/packages/client/tailwind.compat.cjs /app/packages/client/tailwind.compat.cjs
+# The client's Tailwind content scans the chat sources, and the app resolves the package's dist.
+COPY --from=build-packages /app/packages/chat/dist /app/packages/chat/dist
+COPY --from=build-packages /app/packages/chat/src /app/packages/chat/src
 
 WORKDIR /app/client
+ARG VITE_MCP_SANDBOX_URL=
 # Run build explicitly
 RUN npm run build
 
@@ -73,10 +81,13 @@ COPY packages/data-provider/package.json ./packages/data-provider/
 COPY packages/data-schemas/package.json ./packages/data-schemas/
 COPY packages/api/package.json ./packages/api/
 COPY packages/client/package.json ./packages/client/
+COPY packages/chat/package.json ./packages/chat/
 COPY client/package.json ./client/
 COPY api/package.json ./api/
+# packages/api depends on @librechat/code through file:../../vendor/code
+COPY vendor/code ./vendor/code
 
-RUN --mount=type=cache,target=/root/.npm npm ci --omit=dev
+RUN --mount=type=cache,target=/root/.npm npm ci --omit=dev --no-audit
 
 # Copy Source Code (API only, client is served from dist)
 COPY api ./api
@@ -87,6 +98,8 @@ COPY --from=build-packages /app/packages/data-provider/dist ./packages/data-prov
 COPY --from=build-packages /app/packages/data-schemas/dist ./packages/data-schemas/dist
 COPY --from=build-packages /app/packages/api/dist ./packages/api/dist
 COPY --from=build-client /app/client/dist ./client/dist
+# Served by the API for MCP Apps (api/server/controllers/mcpApps.js)
+COPY --from=build-client /app/client/public/mcp-sandbox.html ./client/public/mcp-sandbox.html
 
 # Permissions and Environment
 RUN mkdir -p /app/client/public/images /app/logs /app/uploads /app/skill /app/data && \
